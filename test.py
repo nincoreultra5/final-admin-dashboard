@@ -6,17 +6,11 @@ from supabase import create_client
 # ---------------------------
 # Config (Streamlit Secrets)
 # ---------------------------
-# Streamlit Cloud -> App -> Settings -> Secrets:
-# SUPABASE_URL = "https://eqvhzxljdcoeigbyqrlg.supabase.co"
-# SUPABASE_ANON_KEY = "eyJhbGciOi..."
 try:
     SUPABASE_URL = st.secrets["SUPABASE_URL"]
     SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 except KeyError:
-    st.error(
-        "Missing secrets. In Streamlit Cloud → Settings → Secrets add:\n"
-        "SUPABASE_URL and SUPABASE_ANON_KEY"
-    )
+    st.error("Missing secrets. Add SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit Cloud → Settings → Secrets.")
     st.stop()
 
 ORGS = ["Warehouse", "Bosch", "TDK", "Mathma Nagar"]
@@ -24,12 +18,12 @@ CATEGORIES = ["kids", "adults"]
 KIDS_SIZES = ["26", "28", "30", "32", "34"]
 ADULT_SIZES = ["36", "38", "40", "42", "44", "46"]
 
-st.set_page_config(page_title="T‑Shirt Inventory Dashboard", layout="wide")
+st.set_page_config(page_title="Inventory Analytics Dashboard", layout="wide")
 
 
 @st.cache_resource
 def get_client():
-    # Supabase client initialization [web:248]
+    # Supabase client init [web:248]
     return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
@@ -59,12 +53,17 @@ def require_login():
         st.stop()
 
 
+@st.cache_data(ttl=20)
 def get_stock_df():
     resp = client.table("stock").select("organization,category,size,quantity,updated_at").execute()
-    return sb_to_df(resp)
+    df = sb_to_df(resp)
+    if not df.empty:
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
+    return df
 
 
-def get_transactions_df(limit=500):
+@st.cache_data(ttl=20)
+def get_transactions_df(limit=5000):
     resp = (
         client.table("transactions")
         .select("id,organization,category,size,quantity,type,reason,user_name,created_at")
@@ -72,66 +71,15 @@ def get_transactions_df(limit=500):
         .limit(limit)
         .execute()
     )
-    return sb_to_df(resp)
+    df = sb_to_df(resp)
+    if not df.empty:
+        df["quantity"] = pd.to_numeric(df["quantity"], errors="coerce").fillna(0).astype(int)
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
+        df["date"] = df["created_at"].dt.date
+    return df
 
 
-def get_pending_transfers_for_org(org: str):
-    t = (
-        client.table("stock_transfers")
-        .select("id,from_org,to_org,status,reason,created_by_name,created_by_username,created_at")
-        .eq("to_org", org)
-        .eq("status", "pending")
-        .order("created_at", desc=False)
-        .execute()
-    )
-    tdf = sb_to_df(t)
-    if tdf.empty:
-        return tdf, pd.DataFrame()
-
-    ids = tdf["id"].tolist()
-    items = (
-        client.table("stock_transfer_items")
-        .select("transfer_id,category,size,quantity")
-        .in_("transfer_id", ids)
-        .order("category", desc=False)
-        .order("size", desc=False)
-        .execute()
-    )
-    idf = sb_to_df(items)
-    return tdf, idf
-
-
-def get_transfers_created_by_warehouse(limit=200):
-    t = (
-        client.table("stock_transfers")
-        .select(
-            "id,from_org,to_org,status,reason,created_by_name,created_by_username,"
-            "created_at,decided_at,decided_by_name,decided_by_username,reject_note"
-        )
-        .eq("from_org", "Warehouse")
-        .order("created_at", desc=True)
-        .limit(limit)
-        .execute()
-    )
-    tdf = sb_to_df(t)
-
-    items = client.table("stock_transfer_items").select("transfer_id,category,size,quantity").execute()
-    idf = sb_to_df(items)
-    return tdf, idf
-
-
-def make_transfer_items_from_inputs(kids_map, adults_map):
-    items = []
-    for size, qty in kids_map.items():
-        if int(qty) > 0:
-            items.append({"category": "kids", "size": str(size), "quantity": int(qty)})
-    for size, qty in adults_map.items():
-        if int(qty) > 0:
-            items.append({"category": "adults", "size": str(size), "quantity": int(qty)})
-    return items
-
-
-def stock_totals_by_org(stock_df: pd.DataFrame) -> pd.DataFrame:
+def stock_totals(stock_df: pd.DataFrame) -> pd.DataFrame:
     if stock_df.empty:
         return pd.DataFrame(columns=["organization", "kids_total", "adults_total", "grand_total"])
 
@@ -146,15 +94,67 @@ def stock_totals_by_org(stock_df: pd.DataFrame) -> pd.DataFrame:
         pivot["kids"] = 0
     if "adults" not in pivot.columns:
         pivot["adults"] = 0
+
     pivot["grand_total"] = pivot["kids"] + pivot["adults"]
     pivot = pivot.rename(columns={"kids": "kids_total", "adults": "adults_total"})
     return pivot[["organization", "kids_total", "adults_total", "grand_total"]]
 
 
+def current_stock_kpis(stock_df: pd.DataFrame) -> dict:
+    totals = stock_totals(stock_df)
+    out = {}
+    for org in ORGS:
+        row = totals[totals["organization"] == org]
+        out[org] = int(row["grand_total"].iloc[0]) if not row.empty else 0
+    return out
+
+
+def tx_kpis(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame:
+    if tx_df.empty:
+        return pd.DataFrame(columns=["organization", "in_qty", "out_qty", "net_in_minus_out"])
+
+    df = tx_df.copy()
+    if start_date:
+        df = df[df["date"] >= start_date]
+    if end_date:
+        df = df[df["date"] <= end_date]
+
+    grp = df.groupby(["organization", "type"], as_index=False)["quantity"].sum()
+    pivot = grp.pivot(index="organization", columns="type", values="quantity").fillna(0).reset_index()
+    if "in" not in pivot.columns:
+        pivot["in"] = 0
+    if "out" not in pivot.columns:
+        pivot["out"] = 0
+    pivot["net_in_minus_out"] = pivot["in"] - pivot["out"]
+    pivot = pivot.rename(columns={"in": "in_qty", "out": "out_qty"})
+    return pivot.sort_values("organization")
+
+
+def tx_daily_series(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame:
+    if tx_df.empty:
+        return pd.DataFrame(columns=["date", "in_qty", "out_qty"])
+
+    df = tx_df.copy()
+    if start_date:
+        df = df[df["date"] >= start_date]
+    if end_date:
+        df = df[df["date"] <= end_date]
+
+    daily = df.groupby(["date", "type"], as_index=False)["quantity"].sum()
+    pivot = daily.pivot(index="date", columns="type", values="quantity").fillna(0).reset_index()
+    if "in" not in pivot.columns:
+        pivot["in"] = 0
+    if "out" not in pivot.columns:
+        pivot["out"] = 0
+    pivot = pivot.rename(columns={"in": "in_qty", "out": "out_qty"})
+    pivot["date"] = pd.to_datetime(pivot["date"])
+    return pivot.sort_values("date")
+
+
 # ---------------------------
-# UI
+# UI - Login
 # ---------------------------
-st.title("Inventory Dashboard (Warehouse + Bosch + TDK + Mathma Nagar)")
+st.title("T‑Shirt Inventory Analytics")
 
 with st.sidebar:
     st.header("Login")
@@ -188,215 +188,149 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
-    st.caption("Note: anon + open RLS is not secure for production.")
+    if st.button("Refresh data cache"):
+        st.cache_data.clear()
+        st.rerun()
 
-
-tabs = st.tabs(["Overview", "Warehouse: Create Queue", "Org: Confirm Queue", "Transactions"])
+require_login()
 
 
 # ---------------------------
-# Overview
+# Load data
+# ---------------------------
+stock_df = get_stock_df()
+tx_df = get_transactions_df(limit=5000)
+
+# Date filter for analytics
+min_date = tx_df["date"].min() if not tx_df.empty else None
+max_date = tx_df["date"].max() if not tx_df.empty else None
+
+with st.sidebar:
+    st.subheader("Analytics filters")
+    if min_date and max_date:
+        start_date = st.date_input("Start date", value=min_date, min_value=min_date, max_value=max_date)
+        end_date = st.date_input("End date", value=max_date, min_value=min_date, max_value=max_date)
+    else:
+        start_date, end_date = None, None
+
+
+# ---------------------------
+# Tabs (Queue removed)
+# ---------------------------
+tabs = st.tabs(["Overview (Analytics)", "Transactions (Table)"])
+
+
+# ---------------------------
+# Overview (Analytics)
 # ---------------------------
 with tabs[0]:
-    require_login()
+    # KPIs
+    st.subheader("Current stock (remaining quantity)")
+    kpis = current_stock_kpis(stock_df)
 
-    colA, colB = st.columns([1, 1])
-    with colA:
-        st.subheader("Stock totals by organization")
-    with colB:
-        if st.button("Refresh overview"):
-            st.rerun()
-
-    stock_df = get_stock_df()
-    totals_df = stock_totals_by_org(stock_df)
-    st.dataframe(totals_df, use_container_width=True, hide_index=True)
-
-    st.subheader("Per-size stock (filtered)")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        org_filter = st.selectbox(
-            "Organization",
-            ORGS,
-            index=ORGS.index(st.session_state["user"]["organization"])
-            if st.session_state["user"]["organization"] in ORGS
-            else 0,
-        )
-    with c2:
-        cat_filter = st.selectbox("Category", ["all"] + CATEGORIES, index=0)
-    with c3:
-        size_filter = st.text_input("Size (optional)", value="")
-
-    df = stock_df.copy()
-    df = df[df["organization"] == org_filter]
-    if cat_filter != "all":
-        df = df[df["category"] == cat_filter]
-    if size_filter.strip():
-        df = df[df["size"] == size_filter.strip()]
-    df = df.sort_values(["category", "size"])
-    st.dataframe(df[["organization", "category", "size", "quantity", "updated_at"]], use_container_width=True, hide_index=True)
-
-
-# ---------------------------
-# Warehouse: Create Queue
-# ---------------------------
-with tabs[1]:
-    require_login()
-    user = st.session_state["user"]
-
-    if user["organization"] != "Warehouse":
-        st.info("Only Warehouse can create queue transfer requests.")
-        st.stop()
-
-    st.subheader("Create pending transfer (Warehouse → Organization)")
-
-    to_org = st.selectbox("To organization", ["Bosch", "TDK", "Mathma Nagar"])
-    reason = st.text_input("Reason (optional)", value="")
-
-    st.markdown("### Select quantities")
-    kids_cols = st.columns(len(KIDS_SIZES))
-    kids_map = {}
-    for i, size in enumerate(KIDS_SIZES):
-        with kids_cols[i]:
-            kids_map[size] = st.number_input(
-                f"Kids {size}", min_value=0, step=1, value=0, key=f"kids_{size}"
-            )
-
-    adult_cols = st.columns(len(ADULT_SIZES))
-    adults_map = {}
-    for i, size in enumerate(ADULT_SIZES):
-        with adult_cols[i]:
-            adults_map[size] = st.number_input(
-                f"Adults {size}", min_value=0, step=1, value=0, key=f"adults_{size}"
-            )
-
-    items = make_transfer_items_from_inputs(kids_map, adults_map)
-    total_qty = sum(x["quantity"] for x in items)
-    st.write(f"Total qty: {total_qty}")
-
-    if st.button("Create transfer request", disabled=(total_qty == 0)):
-        try:
-            # RPC call usage [web:206]
-            resp = (
-                client.rpc(
-                    "create_stock_transfer",
-                    {
-                        "p_from_org": "Warehouse",
-                        "p_to_org": to_org,
-                        "p_items": items,
-                        "p_reason": reason or None,
-                        "p_created_by_name": user["name"],
-                        "p_created_by_username": user["username"],
-                    },
-                ).execute()
-            )
-            st.success(f"Created transfer request. Transfer id: {resp.data}")
-        except Exception as e:
-            st.error(f"Create failed: {e}")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Warehouse stock", kpis.get("Warehouse", 0))
+    c2.metric("Bosch stock", kpis.get("Bosch", 0))
+    c3.metric("TDK stock", kpis.get("TDK", 0))
+    c4.metric("Mathma Nagar stock", kpis.get("Mathma Nagar", 0))
 
     st.divider()
-    st.subheader("Recent transfers created by Warehouse")
-    tdf, idf = get_transfers_created_by_warehouse()
-    if tdf.empty:
-        st.write("No transfers found.")
+
+    # Movement KPIs from transactions
+    st.subheader("Movement totals (from transactions)")
+    tx_summary = tx_kpis(tx_df, start_date=start_date, end_date=end_date)
+
+    # Specific metrics requested: Warehouse total IN + total OUT by Bosch/TDK/Mathma + remaining
+    wh_row = tx_summary[tx_summary["organization"] == "Warehouse"]
+    wh_in = int(wh_row["in_qty"].iloc[0]) if not wh_row.empty else 0
+    wh_out = int(wh_row["out_qty"].iloc[0]) if not wh_row.empty else 0
+
+    b_row = tx_summary[tx_summary["organization"] == "Bosch"]
+    t_row = tx_summary[tx_summary["organization"] == "TDK"]
+    m_row = tx_summary[tx_summary["organization"] == "Mathma Nagar"]
+
+    bosch_out = int(b_row["out_qty"].iloc[0]) if not b_row.empty else 0
+    tdk_out = int(t_row["out_qty"].iloc[0]) if not t_row.empty else 0
+    mathma_out = int(m_row["out_qty"].iloc[0]) if not m_row.empty else 0
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("Warehouse IN (period)", wh_in)
+    r2.metric("Bosch OUT (period)", bosch_out)
+    r3.metric("TDK OUT (period)", tdk_out)
+    r4.metric("Mathma Nagar OUT (period)", mathma_out)
+
+    st.caption("These totals are computed from the `transactions` table filtered by the date range above.")
+
+    st.divider()
+
+    # Charts
+    st.subheader("Charts")
+
+    left, right = st.columns(2)
+
+    with left:
+        st.markdown("**Current stock by organization**")
+        totals_df = stock_totals(stock_df).set_index("organization")
+        # Streamlit built-in bar chart [web:261]
+        st.bar_chart(totals_df[["grand_total"]])
+
+    with right:
+        st.markdown("**Current stock split (Kids vs Adults)**")
+        totals_split = stock_totals(stock_df).set_index("organization")
+        st.bar_chart(totals_split[["kids_total", "adults_total"]])
+
+    st.markdown("**Daily IN vs OUT trend**")
+    daily = tx_daily_series(tx_df, start_date=start_date, end_date=end_date)
+    if daily.empty:
+        st.info("No transactions in selected date range.")
     else:
-        out = tdf.copy()
-        if not idf.empty and "id" in out.columns:
-            grouped = (
-                idf.groupby("transfer_id")
-                .apply(lambda x: ", ".join([f"{r['category']}-{r['size']}:{r['quantity']}" for _, r in x.iterrows()]))
-                .reset_index(name="items")
-            )
-            out = out.merge(grouped, left_on="id", right_on="transfer_id", how="left").drop(columns=["transfer_id"])
+        daily_plot = daily.set_index("date")[["in_qty", "out_qty"]]
+        # Streamlit chart elements [web:260]
+        st.line_chart(daily_plot)
+
+    st.divider()
+
+    st.subheader("Top dispatch reasons (OUT)")
+    if tx_df.empty:
+        st.write("No transactions.")
+    else:
+        df_f = tx_df.copy()
+        if start_date:
+            df_f = df_f[df_f["date"] >= start_date]
+        if end_date:
+            df_f = df_f[df_f["date"] <= end_date]
+
+        out_df = df_f[df_f["type"] == "out"].copy()
+        if out_df.empty:
+            st.write("No OUT transactions in selected range.")
         else:
-            out["items"] = ""
+            top_reasons = (
+                out_df.assign(reason=out_df["reason"].fillna("No reason"))
+                .groupby("reason", as_index=False)["quantity"]
+                .sum()
+                .sort_values("quantity", ascending=False)
+                .head(10)
+                .set_index("reason")
+            )
+            st.bar_chart(top_reasons)
 
-        out["created_at"] = out["created_at"].apply(fmt_ts)
-        out["decided_at"] = out["decided_at"].apply(fmt_ts)
-        st.dataframe(
-            out[["id", "to_org", "status", "reason", "items", "created_by_name", "created_at", "decided_by_name", "decided_at", "reject_note"]],
-            use_container_width=True,
-            hide_index=True,
-        )
+    st.divider()
 
+    st.subheader("Tables")
+    st.markdown("**Stock totals table**")
+    st.dataframe(stock_totals(stock_df), use_container_width=True, hide_index=True)
 
-# ---------------------------
-# Org: Confirm Queue
-# ---------------------------
-with tabs[2]:
-    require_login()
-    user = st.session_state["user"]
-    org = user["organization"]
-
-    if org == "Warehouse":
-        st.info("Warehouse does not accept queue requests here.")
-        st.stop()
-
-    st.subheader(f"Pending requests for {org}")
-    tdf, idf = get_pending_transfers_for_org(org)
-
-    if tdf.empty:
-        st.write("No pending requests.")
-    else:
-        for _, tr in tdf.sort_values("created_at").iterrows():
-            transfer_id = int(tr["id"])
-            tr_items = idf[idf["transfer_id"] == transfer_id] if not idf.empty else pd.DataFrame()
-            total = int(tr_items["quantity"].sum()) if not tr_items.empty else 0
-
-            with st.expander(f"Request #{transfer_id} from {tr['from_org']} • Total {total}", expanded=False):
-                st.write(f"Created by: {tr.get('created_by_name') or 'Warehouse'} ({tr.get('created_by_username') or ''})")
-                st.write(f"Reason: {tr.get('reason') or ''}")
-                st.write(f"Created at: {fmt_ts(tr.get('created_at'))}")
-
-                if not tr_items.empty:
-                    st.dataframe(tr_items[["category", "size", "quantity"]], use_container_width=True, hide_index=True)
-
-                c1, c2 = st.columns(2)
-                with c1:
-                    if st.button(f"Accept #{transfer_id}", key=f"acc_{transfer_id}"):
-                        try:
-                            client.rpc(
-                                "accept_stock_transfer",
-                                {
-                                    "p_transfer_id": transfer_id,
-                                    "p_decided_by_name": user["name"],
-                                    "p_decided_by_username": user["username"],
-                                },
-                            ).execute()
-                            st.success(f"Accepted #{transfer_id}.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Accept failed: {e}")
-
-                with c2:
-                    note = st.text_input("Reject note", value="", key=f"rej_note_{transfer_id}")
-                    if st.button(f"Reject #{transfer_id}", key=f"rej_{transfer_id}"):
-                        if not note.strip():
-                            st.warning("Reject note required.")
-                        else:
-                            try:
-                                client.rpc(
-                                    "reject_stock_transfer",
-                                    {
-                                        "p_transfer_id": transfer_id,
-                                        "p_reject_note": note.strip(),
-                                        "p_decided_by_name": user["name"],
-                                    },
-                                ).execute()
-                                st.success(f"Rejected #{transfer_id}.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Reject failed: {e}")
+    st.markdown("**IN/OUT totals by organization (transactions)**")
+    st.dataframe(tx_summary, use_container_width=True, hide_index=True)
 
 
 # ---------------------------
-# Transactions
+# Transactions (Table)
 # ---------------------------
-with tabs[3]:
-    require_login()
+with tabs[1]:
+    st.subheader("Transactions table")
 
-    st.subheader("Transactions (latest 500)")
-    tdf = get_transactions_df(limit=500)
-    if tdf.empty:
+    if tx_df.empty:
         st.write("No transactions.")
     else:
         c1, c2, c3, c4 = st.columns(4)
@@ -409,7 +343,11 @@ with tabs[3]:
         with c4:
             size_f = st.text_input("Size", value="")
 
-        df = tdf.copy()
+        df = tx_df.copy()
+        if start_date:
+            df = df[df["date"] >= start_date]
+        if end_date:
+            df = df[df["date"] <= end_date]
         if org_f != "all":
             df = df[df["organization"] == org_f]
         if typ_f != "all":
@@ -419,7 +357,8 @@ with tabs[3]:
         if size_f.strip():
             df = df[df["size"] == size_f.strip()]
 
-        df["created_at"] = df["created_at"].apply(fmt_ts)
+        df = df.sort_values("created_at", ascending=False).copy()
+        df["created_at"] = df["created_at"].dt.strftime("%Y-%m-%d %H:%M")
         st.dataframe(
             df[["id", "created_at", "organization", "type", "category", "size", "quantity", "reason", "user_name"]],
             use_container_width=True,
