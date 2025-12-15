@@ -4,7 +4,7 @@ from datetime import datetime
 from supabase import create_client
 
 # ---------------------------
-# Page + Theme (white + red/orange)
+# Page + Theme (white + black, light red accent only)
 # ---------------------------
 st.set_page_config(page_title="Inventory Analytics Dashboard", layout="wide")
 
@@ -12,29 +12,27 @@ st.markdown(
     """
     <style>
       /* App background */
-      .stApp { background: #ffffff; }
+      .stApp { background: #ffffff; color:#111827; }
 
-      /* Remove gray blocks feel */
       [data-testid="stHeader"] { background: rgba(255,255,255,0.9); }
       [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #f1f1f1; }
 
-      /* Accent colors */
       :root{
         --brand-red: #ef4444;
-        --brand-orange: #f97316;
-        --soft-red: rgba(239, 68, 68, 0.10);
-        --soft-orange: rgba(249, 115, 22, 0.10);
+        --soft-red: rgba(239, 68, 68, 0.08);
       }
 
-      /* Titles */
-      h1, h2, h3 { color: #111827; }
+      h1, h2, h3, h4, h5, h6, label, p, span, div {
+        color:#111827;
+      }
+
       .brand-badge{
         display:inline-block;
         padding:6px 10px;
         border-radius:999px;
         font-weight:800;
         font-size:12px;
-        color:#991b1b;
+        color:#b91c1c;
         background: var(--soft-red);
         border: 1px solid rgba(239,68,68,0.25);
       }
@@ -43,19 +41,22 @@ st.markdown(
       div.stButton > button{
         border-radius: 12px;
         font-weight: 800;
-        border: 1px solid rgba(249,115,22,0.35);
-        background: linear-gradient(135deg, rgba(239,68,68,0.14), rgba(249,115,22,0.14));
+        border: 1px solid rgba(239,68,68,0.35);
+        background: #ffffff;
+        color:#111827;
       }
       div.stButton > button:hover{
-        border-color: rgba(239,68,68,0.55);
+        border-color: rgba(239,68,68,0.6);
+        background:#f9fafb;
       }
 
       /* Tabs */
       button[data-baseweb="tab"]{
         font-weight:800;
+        color:#111827;
       }
 
-      /* Metrics card-ish feel */
+      /* Metric cards */
       [data-testid="stMetric"]{
         background: #fff;
         border: 1px solid #f1f1f1;
@@ -63,7 +64,7 @@ st.markdown(
         border-radius: 16px;
       }
 
-      /* Dataframes padding */
+      /* Dataframes */
       [data-testid="stDataFrame"]{
         border: 1px solid #f1f1f1;
         border-radius: 14px;
@@ -199,9 +200,9 @@ def tx_daily_series(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.D
     return pivot.sort_values("date")
 
 # ---------------------------
-# UI - Header
+# Header
 # ---------------------------
-st.markdown('<span class="brand-badge">RED / ORANGE • Inventory Analytics</span>', unsafe_allow_html=True)
+st.markdown('<span class="brand-badge">Inventory Analytics</span>', unsafe_allow_html=True)
 st.title("T‑Shirt Inventory Dashboard")
 
 # ---------------------------
@@ -271,7 +272,7 @@ tabs = st.tabs(["Overview (Analytics)", "Transactions (Table)"])
 with tabs[0]:
     st.subheader("KPIs (Remaining + Movements)")
 
-    # Remaining quantities (current stock)
+    # Remaining quantities
     kpis = current_stock_kpis(stock_df)
     a, b, c, d = st.columns(4)
     a.metric("Warehouse remaining", kpis.get("Warehouse", 0))
@@ -279,7 +280,7 @@ with tabs[0]:
     c.metric("TDK remaining", kpis.get("TDK", 0))
     d.metric("Mathma Nagar remaining", kpis.get("Mathma Nagar", 0))
 
-    # Movement totals from transactions (requested)
+    # Movement totals
     tx_summary = tx_kpis(tx_df, start_date=start_date, end_date=end_date)
 
     wh_row = tx_summary[tx_summary["organization"] == "Warehouse"]
@@ -302,7 +303,7 @@ with tabs[0]:
     r4.metric("Mathma Nagar total OUT", mathma_out)
 
     st.divider()
-    st.subheader("Tables (before graphs)")
+    st.subheader("Tables")
 
     st.markdown("**Stock totals by organization**")
     st.dataframe(stock_totals(stock_df), use_container_width=True, hide_index=True)
@@ -311,7 +312,7 @@ with tabs[0]:
     st.dataframe(tx_summary, use_container_width=True, hide_index=True)
 
     # ---------------------------
-    # GRAPHS (ALL at bottom as requested)
+    # GRAPHS (all at bottom)
     # ---------------------------
     st.divider()
     st.subheader("Graphs")
@@ -321,18 +322,18 @@ with tabs[0]:
     g1, g2 = st.columns(2)
     with g1:
         st.markdown("**Current stock by organization (Grand Total)**")
-        st.bar_chart(totals_df[["grand_total"]])  # built-in chart [web:261]
+        st.bar_chart(totals_df[["grand_total"]])
 
     with g2:
         st.markdown("**Current stock split (Kids vs Adults)**")
-        st.bar_chart(totals_df[["kids_total", "adults_total"]])  # built-in chart [web:261]
+        st.bar_chart(totals_df[["kids_total", "adults_total"]])
 
     st.markdown("**Daily IN vs OUT trend**")
     daily = tx_daily_series(tx_df, start_date=start_date, end_date=end_date)
     if daily.empty:
         st.info("No transactions in selected date range.")
     else:
-        st.line_chart(daily.set_index("date")[["in_qty", "out_qty"]])  # chart element [web:260]
+        st.line_chart(daily.set_index("date")[["in_qty", "out_qty"]])
 
     st.markdown("**Top dispatch reasons (OUT)**")
     if tx_df.empty:
@@ -356,7 +357,7 @@ with tabs[0]:
                 .head(12)
                 .set_index("reason")
             )
-            st.bar_chart(top_reasons)  # built-in chart [web:261]
+            st.bar_chart(top_reasons)
 
 
 # ---------------------------
