@@ -6,14 +6,17 @@ from supabase import create_client
 # ---------------------------
 # Config (Streamlit Secrets)
 # ---------------------------
-# In Streamlit Cloud -> Settings -> Secrets, add:
-# SUPABASE_URL = "https://....supabase.co"
-# SUPABASE_ANON_KEY = "eyJ...."
+# Streamlit Cloud -> App -> Settings -> Secrets:
+# SUPABASE_URL = "https://eqvhzxljdcoeigbyqrlg.supabase.co"
+# SUPABASE_ANON_KEY = "eyJhbGciOi..."
 try:
-    SUPABASE_URL = st.secrets["https://eqvhzxljdcoeigbyqrlg.supabase.co"]
-    SUPABASE_ANON_KEY = st.secrets["eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVxdmh6eGxqZGNvZWlnYnlxcmxnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU4MDg1OTcsImV4cCI6MjA4MTM4NDU5N30.q71CAFw3UsjiNwW8oM66HiHbWxGQZQzKRcISoPOO8QE"]
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
 except KeyError:
-    st.error("Missing secrets. Add SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit Cloud → Settings → Secrets.")
+    st.error(
+        "Missing secrets. In Streamlit Cloud → Settings → Secrets add:\n"
+        "SUPABASE_URL and SUPABASE_ANON_KEY"
+    )
     st.stop()
 
 ORGS = ["Warehouse", "Bosch", "TDK", "Mathma Nagar"]
@@ -26,7 +29,7 @@ st.set_page_config(page_title="T‑Shirt Inventory Dashboard", layout="wide")
 
 @st.cache_resource
 def get_client():
-    # Supabase python client init pattern [web:248]
+    # Supabase client initialization [web:248]
     return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
@@ -112,11 +115,7 @@ def get_transfers_created_by_warehouse(limit=200):
     )
     tdf = sb_to_df(t)
 
-    items = (
-        client.table("stock_transfer_items")
-        .select("transfer_id,category,size,quantity")
-        .execute()
-    )
+    items = client.table("stock_transfer_items").select("transfer_id,category,size,quantity").execute()
     idf = sb_to_df(items)
     return tdf, idf
 
@@ -189,7 +188,7 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
-    st.caption("Note: Your current DB policies allow anon access. Not secure for production.")
+    st.caption("Note: anon + open RLS is not secure for production.")
 
 
 tabs = st.tabs(["Overview", "Warehouse: Create Queue", "Org: Confirm Queue", "Transactions"])
@@ -238,7 +237,7 @@ with tabs[0]:
 
 
 # ---------------------------
-# Warehouse: Create Queue (pending transfer)
+# Warehouse: Create Queue
 # ---------------------------
 with tabs[1]:
     require_login()
@@ -258,13 +257,17 @@ with tabs[1]:
     kids_map = {}
     for i, size in enumerate(KIDS_SIZES):
         with kids_cols[i]:
-            kids_map[size] = st.number_input(f"Kids {size}", min_value=0, step=1, value=0, key=f"kids_{size}")
+            kids_map[size] = st.number_input(
+                f"Kids {size}", min_value=0, step=1, value=0, key=f"kids_{size}"
+            )
 
     adult_cols = st.columns(len(ADULT_SIZES))
     adults_map = {}
     for i, size in enumerate(ADULT_SIZES):
         with adult_cols[i]:
-            adults_map[size] = st.number_input(f"Adults {size}", min_value=0, step=1, value=0, key=f"adults_{size}")
+            adults_map[size] = st.number_input(
+                f"Adults {size}", min_value=0, step=1, value=0, key=f"adults_{size}"
+            )
 
     items = make_transfer_items_from_inputs(kids_map, adults_map)
     total_qty = sum(x["quantity"] for x in items)
@@ -272,7 +275,7 @@ with tabs[1]:
 
     if st.button("Create transfer request", disabled=(total_qty == 0)):
         try:
-            # Supabase RPC call pattern [web:206]
+            # RPC call usage [web:206]
             resp = (
                 client.rpc(
                     "create_stock_transfer",
@@ -293,7 +296,6 @@ with tabs[1]:
     st.divider()
     st.subheader("Recent transfers created by Warehouse")
     tdf, idf = get_transfers_created_by_warehouse()
-
     if tdf.empty:
         st.write("No transfers found.")
     else:
@@ -318,7 +320,7 @@ with tabs[1]:
 
 
 # ---------------------------
-# Org: Confirm Queue (accept/reject)
+# Org: Confirm Queue
 # ---------------------------
 with tabs[2]:
     require_login()
