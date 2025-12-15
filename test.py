@@ -4,71 +4,120 @@ from datetime import datetime
 from supabase import create_client
 
 # ---------------------------
-# Page + Theme (white + black, light red accent only)
+# Page config
 # ---------------------------
 st.set_page_config(page_title="Inventory Analytics Dashboard", layout="wide")
 
+# ---------------------------
+# HARD UI THEME: White + Black + Red ONLY
+# ---------------------------
 st.markdown(
     """
     <style>
-      /* App background */
-      .stApp { background: #ffffff; color:#111827; }
-
-      [data-testid="stHeader"] { background: rgba(255,255,255,0.9); }
-      [data-testid="stSidebar"] { background: #ffffff; border-right: 1px solid #f1f1f1; }
-
       :root{
-        --brand-red: #ef4444;
-        --soft-red: rgba(239, 68, 68, 0.08);
+        --red:#ef4444;
+        --black:#111827;
+        --white:#ffffff;
+        --border:#e5e7eb;
+        --muted:#6b7280;
+        --soft-red: rgba(239,68,68,0.08);
       }
 
-      h1, h2, h3, h4, h5, h6, label, p, span, div {
-        color:#111827;
+      /* Main page background + default text */
+      html, body, [data-testid="stAppViewContainer"], .stApp {
+        background: var(--white) !important;
+        color: var(--black) !important;
       }
 
-      .brand-badge{
-        display:inline-block;
-        padding:6px 10px;
-        border-radius:999px;
-        font-weight:800;
-        font-size:12px;
-        color:#b91c1c;
-        background: var(--soft-red);
-        border: 1px solid rgba(239,68,68,0.25);
+      /* Sidebar */
+      [data-testid="stSidebar"]{
+        background: var(--white) !important;
+        border-right: 1px solid var(--border) !important;
+      }
+      [data-testid="stSidebar"] *{
+        color: var(--black) !important;
       }
 
-      /* Sidebar buttons */
-      div.stButton > button{
-        border-radius: 12px;
-        font-weight: 800;
-        border: 1px solid rgba(239,68,68,0.35);
-        background: #ffffff;
-        color:#111827;
+      /* Header */
+      [data-testid="stHeader"]{
+        background: var(--white) !important;
       }
-      div.stButton > button:hover{
-        border-color: rgba(239,68,68,0.6);
-        background:#f9fafb;
+
+      /* FORCE all headings + text to black */
+      h1,h2,h3,h4,h5,h6,p,span,div,label,small,li,strong,em,code {
+        color: var(--black) !important;
       }
+
+      /* Links: red only */
+      a, a:visited { color: var(--red) !important; }
 
       /* Tabs */
       button[data-baseweb="tab"]{
-        font-weight:800;
-        color:#111827;
+        color: var(--black) !important;
+        font-weight: 800 !important;
+      }
+      button[data-baseweb="tab"][aria-selected="true"]{
+        border-bottom: 2px solid var(--red) !important;
       }
 
       /* Metric cards */
       [data-testid="stMetric"]{
-        background: #fff;
-        border: 1px solid #f1f1f1;
-        padding: 14px 14px;
-        border-radius: 16px;
+        background: var(--white) !important;
+        border: 1px solid var(--border) !important;
+        border-radius: 16px !important;
+        padding: 14px 14px !important;
       }
 
-      /* Dataframes */
+      /* Inputs / select / date */
+      .stTextInput input, .stNumberInput input, .stDateInput input {
+        background: var(--white) !important;
+        color: var(--black) !important;
+        border: 1px solid var(--border) !important;
+      }
+      .stSelectbox [data-baseweb="select"] > div{
+        background: var(--white) !important;
+        color: var(--black) !important;
+        border: 1px solid var(--border) !important;
+      }
+
+      /* Buttons: white with red border */
+      div.stButton > button{
+        background: var(--white) !important;
+        color: var(--black) !important;
+        border: 1px solid rgba(239,68,68,0.55) !important;
+        border-radius: 12px !important;
+        font-weight: 900 !important;
+      }
+      div.stButton > button:hover{
+        background: #f9fafb !important;
+        border-color: var(--red) !important;
+      }
+
+      /* Dataframe container */
       [data-testid="stDataFrame"]{
-        border: 1px solid #f1f1f1;
-        border-radius: 14px;
-        overflow: hidden;
+        border: 1px solid var(--border) !important;
+        border-radius: 14px !important;
+        overflow: hidden !important;
+        background: var(--white) !important;
+      }
+
+      /* Expander */
+      [data-testid="stExpander"]{
+        border: 1px solid var(--border) !important;
+        border-radius: 14px !important;
+        background: var(--white) !important;
+      }
+
+      /* Badge */
+      .brand-badge{
+        display:inline-block;
+        padding:6px 10px;
+        border-radius:999px;
+        font-weight:900;
+        font-size:12px;
+        color:#b91c1c !important;
+        background: var(--soft-red) !important;
+        border: 1px solid rgba(239,68,68,0.25) !important;
       }
     </style>
     """,
@@ -162,13 +211,11 @@ def current_stock_kpis(stock_df: pd.DataFrame) -> dict:
 def tx_kpis(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame:
     if tx_df.empty:
         return pd.DataFrame(columns=["organization", "in_qty", "out_qty", "net_in_minus_out"])
-
     df = tx_df.copy()
     if start_date:
         df = df[df["date"] >= start_date]
     if end_date:
         df = df[df["date"] <= end_date]
-
     grp = df.groupby(["organization", "type"], as_index=False)["quantity"].sum()
     pivot = grp.pivot(index="organization", columns="type", values="quantity").fillna(0).reset_index()
     if "in" not in pivot.columns:
@@ -182,13 +229,11 @@ def tx_kpis(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame
 def tx_daily_series(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame:
     if tx_df.empty:
         return pd.DataFrame(columns=["date", "in_qty", "out_qty"])
-
     df = tx_df.copy()
     if start_date:
         df = df[df["date"] >= start_date]
     if end_date:
         df = df[df["date"] <= end_date]
-
     daily = df.groupby(["date", "type"], as_index=False)["quantity"].sum()
     pivot = daily.pivot(index="date", columns="type", values="quantity").fillna(0).reset_index()
     if "in" not in pivot.columns:
@@ -250,7 +295,7 @@ require_login()
 stock_df = get_stock_df()
 tx_df = get_transactions_df(limit=5000)
 
-# Date filters
+# Date filter
 min_date = tx_df["date"].min() if not tx_df.empty else None
 max_date = tx_df["date"].max() if not tx_df.empty else None
 
@@ -265,14 +310,12 @@ with st.sidebar:
 
 tabs = st.tabs(["Overview (Analytics)", "Transactions (Table)"])
 
-
 # ---------------------------
 # Overview
 # ---------------------------
 with tabs[0]:
     st.subheader("KPIs (Remaining + Movements)")
 
-    # Remaining quantities
     kpis = current_stock_kpis(stock_df)
     a, b, c, d = st.columns(4)
     a.metric("Warehouse remaining", kpis.get("Warehouse", 0))
@@ -280,7 +323,6 @@ with tabs[0]:
     c.metric("TDK remaining", kpis.get("TDK", 0))
     d.metric("Mathma Nagar remaining", kpis.get("Mathma Nagar", 0))
 
-    # Movement totals
     tx_summary = tx_kpis(tx_df, start_date=start_date, end_date=end_date)
 
     wh_row = tx_summary[tx_summary["organization"] == "Warehouse"]
@@ -311,9 +353,7 @@ with tabs[0]:
     st.markdown("**IN/OUT totals by organization (transactions)**")
     st.dataframe(tx_summary, use_container_width=True, hide_index=True)
 
-    # ---------------------------
-    # GRAPHS (all at bottom)
-    # ---------------------------
+    # Graphs at bottom
     st.divider()
     st.subheader("Graphs")
 
@@ -358,7 +398,6 @@ with tabs[0]:
                 .set_index("reason")
             )
             st.bar_chart(top_reasons)
-
 
 # ---------------------------
 # Transactions tab
