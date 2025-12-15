@@ -1,17 +1,17 @@
-import os
-from datetime import datetime
-import pandas as pd
 import streamlit as st
-from dotenv import load_dotenv
+import pandas as pd
+from datetime import datetime
 from supabase import create_client
 
 # ---------------------------
-# Config
+# Config - Read from Streamlit secrets
 # ---------------------------
-load_dotenv()
-
-SUPABASE_URL = os.getenv("https://eqvhzxljdcoeigbyqrlg.supabase.co", "").strip()
-SUPABASE_ANON_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVxdmh6eGxqZGNvZWlnYnlxcmxnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjU4MDg1OTcsImV4cCI6MjA4MTM4NDU5N30.q71CAFw3UsjiNwW8oM66HiHbWxGQZQzKRcISoPOO8QE", "").strip()
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_ANON_KEY = st.secrets["SUPABASE_ANON_KEY"]
+except KeyError:
+    st.error("❌ Missing secrets! Add SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit Cloud secrets.")
+    st.stop()
 
 ORGS = ["Warehouse", "Bosch", "TDK", "Mathma Nagar"]
 CATEGORIES = ["kids", "adults"]
@@ -23,8 +23,6 @@ st.set_page_config(page_title="T‑Shirt Inventory Dashboard", layout="wide")
 
 @st.cache_resource
 def get_client():
-    if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-        raise ValueError("Missing SUPABASE_URL or SUPABASE_ANON_KEY in .env")
     return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
@@ -71,7 +69,6 @@ def get_transactions_df(limit=500):
 
 
 def get_pending_transfers_for_org(org: str):
-    # Header rows
     t = (
         client.table("stock_transfers")
         .select("id,from_org,to_org,status,reason,created_by_name,created_by_username,created_at")
@@ -268,7 +265,6 @@ with tabs[1]:
     with col1:
         if st.button("Create transfer request", disabled=(total_qty == 0)):
             try:
-                # Supabase Python rpc call pattern [web:206]
                 resp = (
                     client.rpc(
                         "create_stock_transfer",
@@ -292,7 +288,6 @@ with tabs[1]:
     if tdf.empty:
         st.write("No transfers found.")
     else:
-        # join for display
         if not idf.empty:
             grouped = idf.groupby("transfer_id").apply(
                 lambda x: ", ".join([f"{r['category']}-{r['size']}:{r['quantity']}" for _, r in x.iterrows()])
