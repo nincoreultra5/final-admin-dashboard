@@ -185,19 +185,32 @@ def stock_totals_by_org_size_with_totals(stock_df: pd.DataFrame) -> pd.DataFrame
     return result
 
 def get_warehouse_in_total(tx_df: pd.DataFrame) -> int:
-    """Total IN to Warehouse only"""
+    """Total IN to Warehouse only (TILL DATE)"""
     if tx_df.empty:
         return 0
     warehouse_in = tx_df[(tx_df["type"] == "in") & (tx_df["organization"] == "Warehouse")]["quantity"].sum()
     return int(warehouse_in)
 
-def get_out_total_bosch_tdk_mathma(tx_df: pd.DataFrame) -> int:
-    """Total OUT from Bosch + TDK + Mathma Nagar"""
+def get_bosch_out_total(tx_df: pd.DataFrame) -> int:
+    """Total OUT from Bosch only (TILL DATE)"""
     if tx_df.empty:
         return 0
-    out_orgs = tx_df[tx_df["type"] == "out"]
-    out_total = out_orgs[out_orgs["organization"].isin(["Bosch", "TDK", "Mathma Nagar"])]["quantity"].sum()
-    return int(out_total)
+    bosch_out = tx_df[(tx_df["type"] == "out") & (tx_df["organization"] == "Bosch")]["quantity"].sum()
+    return int(bosch_out)
+
+def get_tdk_out_total(tx_df: pd.DataFrame) -> int:
+    """Total OUT from TDK only (TILL DATE)"""
+    if tx_df.empty:
+        return 0
+    tdk_out = tx_df[(tx_df["type"] == "out") & (tx_df["organization"] == "TDK")]["quantity"].sum()
+    return int(tdk_out)
+
+def get_mathma_out_total(tx_df: pd.DataFrame) -> int:
+    """Total OUT from Mathma Nagar only (TILL DATE)"""
+    if tx_df.empty:
+        return 0
+    mathma_out = tx_df[(tx_df["type"] == "out") & (tx_df["organization"] == "Mathma Nagar")]["quantity"].sum()
+    return int(mathma_out)
 
 # ---------------------------
 # Header
@@ -209,9 +222,11 @@ st.title("T‑Shirt Inventory Dashboard")
 stock_df = get_stock_df()
 tx_df = get_transactions_df(limit=5000)
 
-# Calculate key metrics
+# Calculate key metrics (ALL TILL DATE)
 warehouse_in_total = get_warehouse_in_total(tx_df)
-out_total_bosch_tdk_mathma = get_out_total_bosch_tdk_mathma(tx_df)
+bosch_out_total = get_bosch_out_total(tx_df)
+tdk_out_total = get_tdk_out_total(tx_df)
+mathma_out_total = get_mathma_out_total(tx_df)
 
 # ---------------------------
 # Sidebar
@@ -225,36 +240,32 @@ with st.sidebar:
 tabs = st.tabs(["Overview (Analytics)", "Transactions (Table)"])
 
 # ---------------------------
-# Overview Tab - PRIORITY METRICS FIRST
+# Overview Tab - SEPARATE METRICS FIRST
 # ---------------------------
 with tabs[0]:
-    # PRIORITY METRICS - FIRST ROW
-    st.subheader("🏆 KEY TOTALS (TILL DATE)")
-    
-    col1, col2 = st.columns(2)
+    # PRIORITY METRICS - FIRST ROW: Warehouse IN
+    st.subheader("🏭 WAREHOUSE IN (TILL DATE)")
+    col1 = st.columns(1)[0]
     col1.metric("📦 Total IN Warehouse", warehouse_in_total)
-    col2.metric("📤 Total OUT (Bosch+TDK+Mathma)", out_total_bosch_tdk_mathma)
+    
+    st.divider()
+    
+    # SECOND ROW: OUT from each endpoint SEPARATELY
+    st.subheader("📤 OUT FROM ENDPOINTS (TILL DATE)")
+    col1, col2, col3 = st.columns(3)
+    col1.metric("🔴 Bosch OUT", bosch_out_total)
+    col2.metric("🔵 TDK OUT", tdk_out_total)
+    col3.metric("🟢 Mathma Nagar OUT", mathma_out_total)
     
     st.divider()
     
     # Stock by Company Table with Totals
-    st.subheader("📊 Stock by Company & Size (With Totals)")
+    st.subheader("📊 Current Stock by Company & Size (With Totals)")
     stock_table = stock_totals_by_org_size_with_totals(stock_df)
     if not stock_table.empty:
         st.dataframe(stock_table, use_container_width=True, hide_index=True)
     else:
         st.info("No stock data available.")
-    
-    st.divider()
-    
-    # Additional metrics if needed
-    st.subheader("📈 Current Stock Summary")
-    if not stock_df.empty:
-        current_totals = stock_df.groupby("organization")["quantity"].sum().astype(int)
-        for org, qty in current_totals.items():
-            st.metric(f"{org} Stock", qty)
-    else:
-        st.info("No current stock data.")
 
 # ---------------------------
 # Transactions Tab
