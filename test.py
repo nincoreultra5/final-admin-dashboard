@@ -67,42 +67,6 @@ st.markdown(
         padding: 14px 14px !important;
       }
 
-      /* ---------------------------
-         INPUTS: force WHITE
-         --------------------------- */
-
-      /* Text + password + number + date inputs */
-      .stTextInput input,
-      .stNumberInput input,
-      .stDateInput input,
-      .stTextArea textarea {
-        background: var(--white) !important;
-        color: var(--black) !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 12px !important;
-      }
-
-      /* Selectbox */
-      .stSelectbox [data-baseweb="select"] > div{
-        background: var(--white) !important;
-        color: var(--black) !important;
-        border: 1px solid var(--border) !important;
-        border-radius: 12px !important;
-      }
-
-      /* Buttons: white with red border */
-      div.stButton > button{
-        background: var(--white) !important;
-        color: var(--black) !important;
-        border: 1px solid rgba(239,68,68,0.55) !important;
-        border-radius: 12px !important;
-        font-weight: 900 !important;
-      }
-      div.stButton > button:hover{
-        background: #f9fafb !important;
-        border-color: var(--red) !important;
-      }
-
       /* Tables / DataFrames */
       [data-testid="stDataFrame"]{
         background: var(--white) !important;
@@ -182,74 +146,58 @@ def get_transactions_df(limit=5000):
         df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
     return df
 
-def stock_totals_by_org_size(stock_df: pd.DataFrame) -> pd.DataFrame:
-    """Stock totals per organization and size - ONLY available combinations with company names"""
+def stock_totals_by_org_size_with_totals(stock_df: pd.DataFrame) -> pd.DataFrame:
+    """Stock totals per organization and size with ROW and COLUMN totals"""
     if stock_df.empty:
         return pd.DataFrame()
     
-    # Get unique organizations and sizes that actually have data
-    available_orgs = stock_df["organization"].unique()
+    # Get available organizations and sizes
+    available_orgs = sorted(stock_df["organization"].unique())
     available_sizes = sorted(stock_df["size"].dropna().unique())
     
     if len(available_orgs) == 0 or len(available_sizes) == 0:
         return pd.DataFrame()
     
-    # Group and pivot
+    # Create pivot table
     totals = stock_df.groupby(["organization", "size"], as_index=False)["quantity"].sum()
     pivot = totals.pivot(index="organization", columns="size", values="quantity").fillna(0)
     
     # Reset index to make organization a column
     result = pivot.reset_index()
     
-    # Ensure all available organizations are present
-    for org in available_orgs:
-        if org not in result["organization"].values:
-            new_row = pd.DataFrame({"organization": [org]})
-            for size in available_sizes:
-                new_row[size] = 0
-            result = pd.concat([result, new_row], ignore_index=True)
+    # Add row totals
+    size_cols = available_sizes
+    result["TOTAL"] = result[size_cols].sum(axis=1).astype(int)
     
-    # Sort by organization name
-    result = result.sort_values("organization").reset_index(drop=True)
+    # Add column totals as new row
+    total_row = pd.DataFrame({"organization": ["TOTAL"]})
+    for size in size_cols:
+        total_row[size] = pivot[size].sum().astype(int)
+    total_row["TOTAL"] = total_row[size_cols].sum().astype(int)
+    
+    # Combine with total row
+    result = pd.concat([result, total_row], ignore_index=True)
+    
+    # Reorder columns: organization first, then sizes, then TOTAL
+    cols = ["organization"] + size_cols + ["TOTAL"]
+    result = result[cols]
     
     return result
 
-def current_stock_kpis(stock_df: pd.DataFrame) -> dict:
-    """Current stock per organization"""
-    if stock_df.empty:
-        return {org: 0 for org in ORGS}
-    totals = stock_df.groupby("organization")["quantity"].sum().to_dict()
-    return {org: int(totals.get(org, 0)) for org in ORGS}
-
-def get_total_in_out(tx_df: pd.DataFrame) -> dict:
-    """Total IN and OUT across all organizations"""
+def get_warehouse_in_total(tx_df: pd.DataFrame) -> int:
+    """Total IN to Warehouse only"""
     if tx_df.empty:
-        return {"total_in": 0, "total_out": 0}
-    
-    in_total = tx_df[tx_df["type"] == "in"]["quantity"].sum()
-    out_total = tx_df[tx_df["type"] == "out"]["quantity"].sum()
-    return {"total_in": int(in_total), "total_out": int(out_total)}
+        return 0
+    warehouse_in = tx_df[(tx_df["type"] == "in") & (tx_df["organization"] == "Warehouse")]["quantity"].sum()
+    return int(warehouse_in)
 
-def get_out_by_org(tx_df: pd.DataFrame) -> dict:
-    """OUT totals for Bosch, TDK, Warehouse"""
+def get_out_total_bosch_tdk_mathma(tx_df: pd.DataFrame) -> int:
+    """Total OUT from Bosch + TDK + Mathma Nagar"""
     if tx_df.empty:
-        return {"Bosch": 0, "TDK": 0, "Warehouse": 0}
-    
-    out_df = tx_df[tx_df["type"] == "out"]
-    results = {}
-    for org in ["Bosch", "TDK", "Warehouse"]:
-        org_out = out_df[out_df["organization"] == org]["quantity"].sum()
-        results[org] = int(org_out)
-    return results
-
-def stock_pie_data(stock_df: pd.DataFrame) -> pd.DataFrame:
-    """Data for pie chart display"""
-    if stock_df.empty:
-        return pd.DataFrame({"organization": ORGS, "quantity": 0})
-    
-    totals = stock_df.groupby("organization")["quantity"].sum().reset_index()
-    all_orgs = pd.DataFrame({"organization": ORGS})
-    return all_orgs.merge(totals, on="organization", how="left").fillna({"quantity": 0})
+        return 0
+    out_orgs = tx_df[tx_df["type"] == "out"]
+    out_total = out_orgs[out_orgs["organization"].isin(["Bosch", "TDK", "Mathma Nagar"])]["quantity"].sum()
+    return int(out_total)
 
 # ---------------------------
 # Header
@@ -261,14 +209,12 @@ st.title("T‑Shirt Inventory Dashboard")
 stock_df = get_stock_df()
 tx_df = get_transactions_df(limit=5000)
 
-# Calculate metrics
-kpis = current_stock_kpis(stock_df)
-total_metrics = get_total_in_out(tx_df)
-out_by_org = get_out_by_org(tx_df)
-pie_data = stock_pie_data(stock_df)
+# Calculate key metrics
+warehouse_in_total = get_warehouse_in_total(tx_df)
+out_total_bosch_tdk_mathma = get_out_total_bosch_tdk_mathma(tx_df)
 
 # ---------------------------
-# Sidebar - Simple refresh only
+# Sidebar
 # ---------------------------
 with st.sidebar:
     st.header("Controls")
@@ -279,51 +225,36 @@ with st.sidebar:
 tabs = st.tabs(["Overview (Analytics)", "Transactions (Table)"])
 
 # ---------------------------
-# Overview Tab
+# Overview Tab - PRIORITY METRICS FIRST
 # ---------------------------
 with tabs[0]:
-    # Total Metrics Row 1
-    st.subheader("🏆 TOTAL INVENTORY METRICS (ALL TIME)")
+    # PRIORITY METRICS - FIRST ROW
+    st.subheader("🏆 KEY TOTALS (TILL DATE)")
     
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Warehouse Stock", kpis["Warehouse"])
-    col2.metric("Bosch Stock", kpis["Bosch"])
-    col3.metric("TDK Stock", kpis["TDK"])
-    col4.metric("Mathma Nagar Stock", kpis["Mathma Nagar"])
+    col1, col2 = st.columns(2)
+    col1.metric("📦 Total IN Warehouse", warehouse_in_total)
+    col2.metric("📤 Total OUT (Bosch+TDK+Mathma)", out_total_bosch_tdk_mathma)
     
-    # Total IN/OUT + OUT by endpoints
-    col5, col6, col7, col8 = st.columns(4)
-    col5.metric("💰 TOTAL IN", total_metrics["total_in"])
-    col6.metric("📤 TOTAL OUT", total_metrics["total_out"])
-    col7.metric("🔴 Bosch OUT", out_by_org["Bosch"])
-    col8.metric("🔵 TDK OUT", out_by_org["TDK"])
-
     st.divider()
     
-    # Per Company Stock by Size Table - WITH COMPANY NAMES AS FIRST COLUMN
-    st.subheader("📊 Stock by Company & Available Sizes")
-    stock_size_table = stock_totals_by_org_size(stock_df)
-    if not stock_size_table.empty:
-        st.dataframe(stock_size_table, use_container_width=True, hide_index=True)
+    # Stock by Company Table with Totals
+    st.subheader("📊 Stock by Company & Size (With Totals)")
+    stock_table = stock_totals_by_org_size_with_totals(stock_df)
+    if not stock_table.empty:
+        st.dataframe(stock_table, use_container_width=True, hide_index=True)
     else:
         st.info("No stock data available.")
     
     st.divider()
     
-    # Simple Distribution Chart
-    st.subheader("📈 Stock Distribution by Organization")
-    if not pie_data.empty and pie_data["quantity"].sum() > 0:
-        st.bar_chart(pie_data.set_index("organization")["quantity"], height=400)
-        # Display percentages
-        total_stock = pie_data["quantity"].sum()
-        col1, col2, col3, col4 = st.columns(4)
-        for idx, row in pie_data.iterrows():
-            if row["quantity"] > 0:
-                pct = (row["quantity"] / total_stock * 100)
-                with locals()[f"col{idx+1}"]:
-                    st.metric(f"{row['organization']}", f"{int(row['quantity'])}", f"{pct:.1f}%")
+    # Additional metrics if needed
+    st.subheader("📈 Current Stock Summary")
+    if not stock_df.empty:
+        current_totals = stock_df.groupby("organization")["quantity"].sum().astype(int)
+        for org, qty in current_totals.items():
+            st.metric(f"{org} Stock", qty)
     else:
-        st.info("No stock data available for distribution chart.")
+        st.info("No current stock data.")
 
 # ---------------------------
 # Transactions Tab
