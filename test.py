@@ -172,6 +172,7 @@ except KeyError:
 
 ORGS = ["Warehouse", "Bosch", "TDK", "Mathma Nagar"]
 CATEGORIES = ["kids", "adults"]
+SIZES = ["S", "M", "L", "XL", "XXL"]  # Common sizes for all institutions
 
 # ---------------------------
 # Supabase client
@@ -239,15 +240,33 @@ def current_stock_kpis(stock_df: pd.DataFrame) -> dict:
         out[org] = int(row["grand_total"].iloc[0]) if not row.empty else 0
     return out
 
-def tx_kpis(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame:
+def get_total_in_out(tx_df: pd.DataFrame) -> dict:
+    """Calculate total IN and total OUT across all organizations"""
+    if tx_df.empty:
+        return {"total_in": 0, "total_out": 0}
+    
+    in_total = tx_df[tx_df["type"] == "in"]["quantity"].sum()
+    out_total = tx_df[tx_df["type"] == "out"]["quantity"].sum()
+    return {"total_in": int(in_total), "total_out": int(out_total)}
+
+def get_out_by_org(tx_df: pd.DataFrame) -> dict:
+    """Calculate OUT totals for Bosch, TDK, Warehouse"""
+    if tx_df.empty:
+        return {"Bosch": 0, "TDK": 0, "Warehouse": 0}
+    
+    out_df = tx_df[tx_df["type"] == "out"]
+    results = {}
+    for org in ["Bosch", "TDK", "Warehouse"]:
+        org_out = out_df[out_df["organization"] == org]["quantity"].sum()
+        results[org] = int(org_out)
+    return results
+
+def tx_kpis(tx_df: pd.DataFrame) -> pd.DataFrame:
+    """Updated without date filters - ALL TIME totals"""
     if tx_df.empty:
         return pd.DataFrame(columns=["organization", "in_qty", "out_qty", "net_in_minus_out"])
-    df = tx_df.copy()
-    if start_date:
-        df = df[df["date"] >= start_date]
-    if end_date:
-        df = df[df["date"] <= end_date]
-    grp = df.groupby(["organization", "type"], as_index=False)["quantity"].sum()
+    
+    grp = tx_df.groupby(["organization", "type"], as_index=False)["quantity"].sum()
     pivot = grp.pivot(index="organization", columns="type", values="quantity").fillna(0).reset_index()
     if "in" not in pivot.columns:
         pivot["in"] = 0
@@ -257,15 +276,12 @@ def tx_kpis(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame
     pivot = pivot.rename(columns={"in": "in_qty", "out": "out_qty"})
     return pivot.sort_values("organization")
 
-def tx_daily_series(tx_df: pd.DataFrame, start_date=None, end_date=None) -> pd.DataFrame:
+def tx_daily_series(tx_df: pd.DataFrame) -> pd.DataFrame:
+    """Updated without date filters - ALL TIME daily series"""
     if tx_df.empty:
         return pd.DataFrame(columns=["date", "in_qty", "out_qty"])
-    df = tx_df.copy()
-    if start_date:
-        df = df[df["date"] >= start_date]
-    if end_date:
-        df = df[df["date"] <= end_date]
-    daily = df.groupby(["date", "type"], as_index=False)["quantity"].sum()
+    
+    daily = tx_df.groupby(["date", "type"], as_index=False)["quantity"].sum()
     pivot = daily.pivot(index="date", columns="type", values="quantity").fillna(0).reset_index()
     if "in" not in pivot.columns:
         pivot["in"] = 0
@@ -285,23 +301,16 @@ st.title("T‑Shirt Inventory Dashboard")
 stock_df = get_stock_df()
 tx_df = get_transactions_df(limit=5000)
 
-# Date filter
-min_date = tx_df["date"].min() if not tx_df.empty else None
-max_date = tx_df["date"].max() if not tx_df.empty else None
+# Calculate totals
+total_metrics = get_total_in_out(tx_df)
+out_by_org = get_out_by_org(tx_df)
 
 # ---------------------------
-# Sidebar - Filters only
+# Sidebar - Filters only (NO DATE FILTER)
 # ---------------------------
 with st.sidebar:
     st.header("Filters")
-    if min_date and max_date:
-        start_date = st.date_input("Start date", value=min_date, min_value=min_date, max_value=max_date)
-        end_date = st.date_input("End date", value=max_date, min_value=min_date, max_value=max_date)
-    else:
-        start_date, end_date = None, None
-        st.info("No transactions yet, so date filter is disabled.")
     
-    st.divider()
     if st.button("Refresh data"):
         st.cache_data.clear()
         st.rerun()
@@ -312,79 +321,60 @@ tabs = st.tabs(["Overview (Analytics)", "Transactions (Table)"])
 # Overview
 # ---------------------------
 with tabs[0]:
-    st.subheader("KPIs (Remaining + Movements)")
-
+    st.subheader("🏆 TOTAL INVENTORY METRICS (ALL TIME)")
+    
+    # Row 1: Current Stock + Grand Totals
+    col1, col2, col3, col4 = st.columns(4)
     kpis = current_stock_kpis(stock_df)
-    a, b, c, d = st.columns(4)
-    a.metric("Warehouse remaining", kpis.get("Warehouse", 0))
-    b.metric("Bosch remaining", kpis.get("Bosch", 0))
-    c.metric("TDK remaining", kpis.get("TDK", 0))
-    d.metric("Mathma Nagar remaining", kpis.get("Mathma Nagar", 0))
-
-    tx_summary = tx_kpis(tx_df, start_date=start_date, end_date=end_date)
-
-    wh_row = tx_summary[tx_summary["organization"] == "Warehouse"]
-    wh_in = int(wh_row["in_qty"].iloc[0]) if not wh_row.empty else 0
-
-    b_row = tx_summary[tx_summary["organization"] == "Bosch"]
-    t_row = tx_summary[tx_summary["organization"] == "TDK"]
-    m_row = tx_summary[tx_summary["organization"] == "Mathma Nagar"]
-
-    bosch_out = int(b_row["out_qty"].iloc[0]) if not b_row.empty else 0
-    tdk_out = int(t_row["out_qty"].iloc[0]) if not t_row.empty else 0
-    mathma_out = int(m_row["out_qty"].iloc[0]) if not m_row.empty else 0
+    col1.metric("Warehouse Stock", kpis.get("Warehouse", 0))
+    col2.metric("Bosch Stock", kpis.get("Bosch", 0))
+    col3.metric("TDK Stock", kpis.get("TDK", 0))
+    col4.metric("Mathma Nagar Stock", kpis.get("Mathma Nagar", 0))
+    
+    # Row 2: Total IN/OUT + OUT by endpoints
+    col5, col6, col7, col8 = st.columns(4)
+    col5.metric("💰 TOTAL IN", total_metrics["total_in"])
+    col6.metric("📤 TOTAL OUT", total_metrics["total_out"])
+    col7.metric("🔴 Bosch OUT", out_by_org["Bosch"])
+    col8.metric("🔵 TDK OUT", out_by_org["TDK"])
 
     st.divider()
-    st.subheader("Period totals (from transactions)")
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("Warehouse total IN", wh_in)
-    r2.metric("Bosch total OUT", bosch_out)
-    r3.metric("TDK total OUT", tdk_out)
-    r4.metric("Mathma Nagar total OUT", mathma_out)
+    st.subheader("📊 Detailed Tables")
 
-    st.divider()
-    st.subheader("Tables")
-
-    st.markdown("**Stock totals by organization**")
+    st.markdown("**Current Stock by Organization**")
     st.dataframe(stock_totals(stock_df), use_container_width=True, hide_index=True)
 
-    st.markdown("**IN/OUT totals by organization (transactions)**")
+    st.markdown("**ALL TIME IN/OUT by Organization**")
+    tx_summary = tx_kpis(tx_df)
     st.dataframe(tx_summary, use_container_width=True, hide_index=True)
 
     st.divider()
-    st.subheader("Graphs")
+    st.subheader("📈 Charts (All Time Data)")
 
     totals_df = stock_totals(stock_df).set_index("organization")
-
     g1, g2 = st.columns(2)
     with g1:
-        st.markdown("**Current stock by organization (Grand Total)**")
+        st.markdown("**Current Stock (Grand Total)**")
         st.bar_chart(totals_df[["grand_total"]])
-
+    
     with g2:
-        st.markdown("**Current stock split (Kids vs Adults)**")
+        st.markdown("**Kids vs Adults Stock**")
         st.bar_chart(totals_df[["kids_total", "adults_total"]])
 
-    st.markdown("**Daily IN vs OUT trend**")
-    daily = tx_daily_series(tx_df, start_date=start_date, end_date=end_date)
+    st.markdown("**Daily IN vs OUT Trend (All Time)**")
+    daily = tx_daily_series(tx_df)
     if daily.empty:
-        st.info("No transactions in selected date range.")
+        st.info("No transactions available.")
     else:
         st.line_chart(daily.set_index("date")[["in_qty", "out_qty"]])
 
-    st.markdown("**Top dispatch reasons (OUT)**")
+    st.markdown("**Top Dispatch Reasons (OUT - All Time)**")
     if tx_df.empty:
         st.info("No transactions.")
     else:
-        df_f = tx_df.copy()
-        if start_date:
-            df_f = df_f[df_f["date"] >= start_date]
-        if end_date:
-            df_f = df_f[df_f["date"] <= end_date]
-
-        out_df = df_f[df_f["type"] == "out"].copy()
+        out_df = tx_df[tx_df["type"] == "out"].copy()
         if out_df.empty:
-            st.info("No OUT transactions in selected range.")
+            st.info("No OUT transactions.")
         else:
             top_reasons = (
                 out_df.assign(reason=out_df["reason"].fillna("No reason"))
@@ -397,15 +387,15 @@ with tabs[0]:
             st.bar_chart(top_reasons)
 
 # ---------------------------
-# Transactions tab
+# Transactions tab - Updated with Size filter
 # ---------------------------
 with tabs[1]:
-    st.subheader("Transactions table")
+    st.subheader("Transactions Table (All Time)")
 
     if tx_df.empty:
         st.write("No transactions.")
     else:
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         with c1:
             org_f = st.selectbox("Org", ["all"] + ORGS, index=0)
         with c2:
@@ -413,21 +403,21 @@ with tabs[1]:
         with c3:
             cat_f = st.selectbox("Category", ["all"] + CATEGORIES, index=0)
         with c4:
-            size_f = st.text_input("Size", value="")
+            size_f = st.selectbox("Size", ["all"] + SIZES, index=0)
+        with c5:
+            reason_f = st.text_input("Reason contains", value="")
 
         df = tx_df.copy()
-        if start_date:
-            df = df[df["date"] >= start_date]
-        if end_date:
-            df = df[df["date"] <= end_date]
         if org_f != "all":
             df = df[df["organization"] == org_f]
         if typ_f != "all":
             df = df[df["type"] == typ_f]
         if cat_f != "all":
             df = df[df["category"] == cat_f]
-        if size_f.strip():
-            df = df[df["size"] == size_f.strip()]
+        if size_f != "all":
+            df = df[df["size"] == size_f]
+        if reason_f.strip():
+            df = df[df["reason"].str.contains(reason_f.strip(), case=False, na=False)]
 
         df = df.sort_values("created_at", ascending=False).copy()
         df["created_at"] = df["created_at"].dt.strftime("%Y-%m-%d %H:%M")
