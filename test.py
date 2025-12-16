@@ -104,9 +104,6 @@ except KeyError:
     st.error("Missing secrets. Add SUPABASE_URL and SUPABASE_ANON_KEY in Streamlit Cloud → Settings → Secrets.")
     st.stop()
 
-ORGS = ["Warehouse", "Bosch", "TDK", "Mathma Nagar"]
-CATEGORIES = ["kids", "adults"]
-
 # ---------------------------
 # Supabase client
 # ---------------------------
@@ -146,156 +143,109 @@ def get_transactions_df(limit=5000):
         df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
     return df
 
-def stock_totals_by_org_size_with_totals(stock_df: pd.DataFrame) -> pd.DataFrame:
-    """Stock totals per organization and size with ROW and COLUMN totals"""
-    if stock_df.empty:
-        return pd.DataFrame()
+def get_warehouse_metrics(tx_df: pd.DataFrame, stock_df: pd.DataFrame) -> dict:
+    """Warehouse specific metrics"""
+    metrics = {}
     
-    # Get available organizations and sizes
-    available_orgs = sorted(stock_df["organization"].unique())
-    available_sizes = sorted(stock_df["size"].dropna().unique())
+    # Total IN to Warehouse
+    if not tx_df.empty:
+        warehouse_in = tx_df[(tx_df["type"] == "in") & (tx_df["organization"] == "Warehouse")]["quantity"].sum()
+        warehouse_out = tx_df[(tx_df["type"] == "out") & (tx_df["organization"] == "Warehouse")]["quantity"].sum()
+    else:
+        warehouse_in = 0
+        warehouse_out = 0
     
-    if len(available_orgs) == 0 or len(available_sizes) == 0:
-        return pd.DataFrame()
+    # Current stock available in Warehouse
+    if not stock_df.empty:
+        warehouse_stock = stock_df[stock_df["organization"] == "Warehouse"]["quantity"].sum()
+    else:
+        warehouse_stock = 0
     
-    # Create pivot table
-    totals = stock_df.groupby(["organization", "size"], as_index=False)["quantity"].sum()
-    pivot = totals.pivot(index="organization", columns="size", values="quantity").fillna(0)
+    metrics["total_in"] = int(warehouse_in)
+    metrics["total_out"] = int(warehouse_out)
+    metrics["stock_available"] = int(warehouse_stock)
     
-    # Reset index to make organization a column
-    result = pivot.reset_index()
-    
-    # Add row totals
-    size_cols = available_sizes
-    result["TOTAL"] = result[size_cols].sum(axis=1).astype(int)
-    
-    # Add column totals as new row
-    total_row = pd.DataFrame({"organization": ["TOTAL"]})
-    for size in size_cols:
-        total_row[size] = pivot[size].sum().astype(int)
-    total_row["TOTAL"] = total_row[size_cols].sum().astype(int)
-    
-    # Combine with total row
-    result = pd.concat([result, total_row], ignore_index=True)
-    
-    # Reorder columns: organization first, then sizes, then TOTAL
-    cols = ["organization"] + size_cols + ["TOTAL"]
-    result = result[cols]
-    
-    return result
-
-def get_warehouse_in_total(tx_df: pd.DataFrame) -> int:
-    """Total IN to Warehouse only (TILL DATE)"""
-    if tx_df.empty:
-        return 0
-    warehouse_in = tx_df[(tx_df["type"] == "in") & (tx_df["organization"] == "Warehouse")]["quantity"].sum()
-    return int(warehouse_in)
-
-def get_bosch_out_total(tx_df: pd.DataFrame) -> int:
-    """Total OUT from Bosch only (TILL DATE)"""
-    if tx_df.empty:
-        return 0
-    bosch_out = tx_df[(tx_df["type"] == "out") & (tx_df["organization"] == "Bosch")]["quantity"].sum()
-    return int(bosch_out)
-
-def get_tdk_out_total(tx_df: pd.DataFrame) -> int:
-    """Total OUT from TDK only (TILL DATE)"""
-    if tx_df.empty:
-        return 0
-    tdk_out = tx_df[(tx_df["type"] == "out") & (tx_df["organization"] == "TDK")]["quantity"].sum()
-    return int(tdk_out)
-
-def get_mathma_out_total(tx_df: pd.DataFrame) -> int:
-    """Total OUT from Mathma Nagar only (TILL DATE)"""
-    if tx_df.empty:
-        return 0
-    mathma_out = tx_df[(tx_df["type"] == "out") & (tx_df["organization"] == "Mathma Nagar")]["quantity"].sum()
-    return int(mathma_out)
+    return metrics
 
 # ---------------------------
 # Header
 # ---------------------------
-st.markdown('<span class="brand-badge">Inventory Analytics</span>', unsafe_allow_html=True)
-st.title("T‑Shirt Inventory Dashboard")
+st.markdown('<span class="brand-badge">Warehouse Analytics</span>', unsafe_allow_html=True)
+st.title("🏭 Warehouse Inventory Dashboard")
 
 # Load data
 stock_df = get_stock_df()
 tx_df = get_transactions_df(limit=5000)
 
-# Calculate key metrics (ALL TILL DATE)
-warehouse_in_total = get_warehouse_in_total(tx_df)
-bosch_out_total = get_bosch_out_total(tx_df)
-tdk_out_total = get_tdk_out_total(tx_df)
-mathma_out_total = get_mathma_out_total(tx_df)
+# Calculate Warehouse metrics
+warehouse_metrics = get_warehouse_metrics(tx_df, stock_df)
 
 # ---------------------------
 # Sidebar
 # ---------------------------
 with st.sidebar:
     st.header("Controls")
-    if st.button("Refresh data"):
+    if st.button("🔄 Refresh data"):
         st.cache_data.clear()
         st.rerun()
 
-tabs = st.tabs(["Overview (Analytics)", "Transactions (Table)"])
-
 # ---------------------------
-# Overview Tab - SEPARATE METRICS FIRST
+# MAIN DASHBOARD - WAREHOUSE ONLY
 # ---------------------------
-with tabs[0]:
-    # PRIORITY METRICS - FIRST ROW: Warehouse IN
-    st.subheader("🏭 WAREHOUSE IN (TILL DATE)")
-    col1 = st.columns(1)[0]
-    col1.metric("📦 Total IN Warehouse", warehouse_in_total)
-    
-    st.divider()
-    
-    # SECOND ROW: OUT from each endpoint SEPARATELY
-    st.subheader("📤 OUT FROM ENDPOINTS (TILL DATE)")
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🔴 Bosch OUT", bosch_out_total)
-    col2.metric("🔵 TDK OUT", tdk_out_total)
-    col3.metric("🟢 Mathma Nagar OUT", mathma_out_total)
-    
-    st.divider()
-    
-    # Stock by Company Table with Totals
-    st.subheader("📊 Current Stock by Company & Size (With Totals)")
-    stock_table = stock_totals_by_org_size_with_totals(stock_df)
-    if not stock_table.empty:
-        st.dataframe(stock_table, use_container_width=True, hide_index=True)
-    else:
-        st.info("No stock data available.")
+st.subheader("📊 Warehouse Key Metrics (All Time)")
 
-# ---------------------------
-# Transactions Tab
-# ---------------------------
-with tabs[1]:
-    st.subheader("Transactions Table (All Time)")
+# 2x2 Metrics Grid
+col1, col2 = st.columns(2)
+col3, col4 = st.columns(2)
 
-    if tx_df.empty:
-        st.write("No transactions.")
-    else:
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            org_f = st.selectbox("Org", ["all"] + ORGS, index=0)
-        with c2:
-            typ_f = st.selectbox("Type", ["all", "in", "out"], index=0)
-        with c3:
-            cat_f = st.selectbox("Category", ["all"] + CATEGORIES, index=0)
+with col1:
+    st.metric("📦 Total IN", warehouse_metrics["total_in"])
+with col2:
+    st.metric("📤 Total OUT", warehouse_metrics["total_out"])
+with col3:
+    st.metric("📈 Stock Available", warehouse_metrics["stock_available"])
+with col4:
+    net_stock = warehouse_metrics["total_in"] - warehouse_metrics["total_out"]
+    st.metric("🔄 Net (IN - OUT)", net_stock)
 
-        df = tx_df.copy()
-        if org_f != "all":
-            df = df[df["organization"] == org_f]
-        if typ_f != "all":
-            df = df[df["type"] == typ_f]
-        if cat_f != "all":
-            df = df[df["category"] == cat_f]
+st.divider()
 
-        df = df.sort_values("created_at", ascending=False).copy()
-        df["created_at"] = df["created_at"].dt.strftime("%Y-%m-%d %H:%M")
-        st.dataframe(
-            df[["id", "created_at", "organization", "type", "category", "size", "quantity", "reason", "user_name"]],
-            use_container_width=True,
-            hide_index=True,
-        )
+# Warehouse Stock Table
+st.subheader("📋 Current Warehouse Stock by Size")
+warehouse_stock = stock_df[stock_df["organization"] == "Warehouse"].copy()
+if not warehouse_stock.empty:
+    # Pivot by size
+    stock_pivot = warehouse_stock.pivot_table(
+        index="category", 
+        columns="size", 
+        values="quantity", 
+        aggfunc="sum", 
+        fill_value=0
+    ).astype(int)
+    st.dataframe(stock_pivot, use_container_width=True)
+    
+    # Summary totals
+    st.markdown("**Totals by Category:**")
+    kids_total = warehouse_stock[warehouse_stock["category"] == "kids"]["quantity"].sum()
+    adults_total = warehouse_stock[warehouse_stock["category"] == "adults"]["quantity"].sum()
+    col1, col2 = st.columns(2)
+    col1.metric("👶 Kids Total", int(kids_total))
+    col2.metric("👨 Adults Total", int(adults_total))
+else:
+    st.info("No warehouse stock data available.")
+
+st.divider()
+
+# Warehouse Transactions Table
+st.subheader("📜 Recent Warehouse Transactions")
+warehouse_tx = tx_df[tx_df["organization"] == "Warehouse"].copy()
+if not warehouse_tx.empty:
+    warehouse_tx = warehouse_tx.sort_values("created_at", ascending=False)
+    warehouse_tx["created_at"] = warehouse_tx["created_at"].dt.strftime("%Y-%m-%d %H:%M")
+    st.dataframe(
+        warehouse_tx[["created_at", "type", "category", "size", "quantity", "reason", "user_name"]],
+        use_container_width=True,
+        hide_index=True
+    )
+else:
+    st.info("No warehouse transactions found.")
